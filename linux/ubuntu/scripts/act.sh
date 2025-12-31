@@ -131,7 +131,7 @@ for ver in "${NODE[@]}"; do
   tar -Jxf "node-$VER-linux-$(node_arch).tar.xz" --strip-components=1 -C "$NODEPATH"
   rm "node-$VER-linux-$(node_arch).tar.xz"
   if [[ "${ver}" == "24" ]]; then  # make this version the default (latest LTS)
-    sed "s|^PATH=|PATH=$NODEPATH/bin:|mg" -i /etc/environment
+    sed -i "s|^PATH=|PATH=$NODEPATH/bin:|" /etc/environment
   fi
   export PATH="$NODEPATH/bin:$PATH"
 
@@ -140,6 +140,13 @@ for ver in "${NODE[@]}"; do
 
   printf "\n\t🐋 Installed NPM 🐋\t\n"
   "${NODEPATH}"/bin/npm -v
+  
+  # Create symlinks for the default version
+  if [[ "${ver}" == "24" ]]; then
+    ln -sf "${NODEPATH}/bin/node" /usr/local/bin/node
+    ln -sf "${NODEPATH}/bin/npm" /usr/local/bin/npm
+    ln -sf "${NODEPATH}/bin/npx" /usr/local/bin/npx
+  fi
 done
 
 case "$(uname -m)" in
