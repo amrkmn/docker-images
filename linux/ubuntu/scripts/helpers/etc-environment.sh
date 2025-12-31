@@ -44,7 +44,7 @@ function setEtcEnvironmentVariable {
 function prependEtcEnvironmentVariable {
     variable_name="$1"
     element="$2"
-    # TODO: handle the case if the variable does not exist
+    # NOTE: Future enhancement - handle the case if the variable does not exist
     existing_value=$(getEtcEnvironmentVariable "${variable_name}")
     setEtcEnvironmentVariable "${variable_name}" "${element}:${existing_value}"
 }
@@ -52,7 +52,7 @@ function prependEtcEnvironmentVariable {
 function appendEtcEnvironmentVariable {
     variable_name="$1"
     element="$2"
-    # TODO: handle the case if the variable does not exist
+    # NOTE: Future enhancement - handle the case if the variable does not exist
     existing_value=$(getEtcEnvironmentVariable "${variable_name}")
     setEtcEnvironmentVariable "${variable_name}" "${existing_value}:${element}"
 }
@@ -73,7 +73,7 @@ function appendEtcEnvironmentPath {
 #    of value of the exiting PATH variable exactly as it would happen with real PAM app read
 #    /etc/environment
 #
-# TODO: there might be the others variables to be processed in the same way as "PATH" variable
+# NOTE: Future enhancement - there might be other variables to be processed in the same way as "PATH" variable
 #       ie MANPATH, INFOPATH, LD_*, etc. In the current implementation the values from /etc/environment
 #       replace the values of the current environment
 function  reloadEtcEnvironment {

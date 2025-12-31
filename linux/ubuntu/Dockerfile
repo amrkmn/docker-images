@@ -43,4 +43,7 @@ LABEL org.opencontainers.image.title="${BUILD_TAG}-${TARGETARCH}"
 LABEL org.opencontainers.image.description="Special image built for using with https://github.com/nektos/act"
 LABEL org.opencontainers.image.revision="${BUILD_REF}"
 
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD [ "$(command -v bash)" ] || exit 1
+
 USER ${RUNNER}
