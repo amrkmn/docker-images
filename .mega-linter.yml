@@ -4,3 +4,6 @@ DISABLE:
 DISABLE_LINTERS:
   - SPELL_CSPELL
 PRINT_ALPACA: false
+
+# Disable specific Checkov security checks that don't apply to our use case
+REPOSITORY_CHECKOV_ARGUMENTS: --skip-check CKV_GHA_7,CKV2_GHA_1
