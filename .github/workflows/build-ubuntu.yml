@@ -1,388 +1,133 @@
-name: Build ubuntu images
+---
+name: Build Ubuntu Docker Images
 
 on:
-  schedule:
-    - cron: 0 12 */7 * *
   push:
+    branches:
+      - main
+      - master
     paths:
-      - '.github/workflows/build-ubuntu.yml'
       - 'linux/ubuntu/**'
       - 'build.ps1'
-    branches:
-      - 'master'
+      - '.github/workflows/build-ubuntu.yml'
   pull_request:
     paths:
-      - '.github/workflows/build-ubuntu.yml'
       - 'linux/ubuntu/**'
       - 'build.ps1'
   workflow_dispatch:
+    inputs:
+      ubuntu_version:
+        description: 'Ubuntu version'
+        required: true
+        type: choice
+        options:
+          - '22.04'
+          - '24.04'
+          - 'both'
+        default: 'both'
+      push_image:
+        description: 'Push image to registry'
+        required: true
+        type: boolean
+        default: false
+  schedule:
+    # Run weekly on Sundays at 2 AM UTC
+    - cron: '0 2 * * 0'
 
 env:
-  IMAGE_LABEL_OWNER: ${{ github.repository_owner }}
-  IMAGE_LABEL_REPO: ${{ github.repository }}
-  SLUG: ${{ github.repository_owner }}/ubuntu
-  DISTRO: ubuntu
-  NODE: '16 18 20'
-  BUILD_REF: ${{ github.sha }}
-  SKIP_TEST: false
-  PUSH_GHCR: ${{ github.repository == (github.event.pull_request.head.repo.full_name || github.repository) && '1' || '' }}
-  # PUSH_QUAY: ${{ secrets.QUAY_USER && secrets.QUAY_TOKEN && '1' || '' }}
-  PUSH_DOCKER_HUB: ${{ secrets.DOCKER_USER && secrets.DOCKER_TOKEN && '1' || '' }}
-  LATEST_TAG: 24.04
-
-defaults:
-  run:
-    shell: sh
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/ubuntu
 
 jobs:
-  build-base:
-    name: Build base ${{ matrix.TAG }}
-    if: "!contains(github.event.pull_request.body, '[skip build-base]')"
+  build:
     runs-on: ubuntu-latest
-    env:
-      PLATFORMS: ${{ matrix.PLATFORMS }}
-    strategy:
-      fail-fast: true
-      max-parallel: 4
-      matrix:
-        PLATFORMS:
-          - linux/amd64,linux/arm64,linux/arm/v7
-        TAG:
-          - 24.04
-          - 22.04
-          - 20.04
-    steps:
-      - name: Disable apparmor restrictions
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '>=1.21.0'
-      - name: Setup buildah
-        run: |
-          sudo apt-get -y -qq update
-          sudo apt-get -y install bats btrfs-progs git go-md2man golang libapparmor-dev libglib2.0-dev libgpgme11-dev libseccomp-dev libselinux1-dev make skopeo
-          git clone https://github.com/containers/buildah buildah
-          git -C buildah checkout v1.35.0
-          make -C buildah buildah
-          sudo mkdir -p /usr/local/bin/
-          sudo cp "$PWD/buildah/bin"/* /usr/local/bin/
-          sudo apt install protobuf-compiler
-          git clone https://github.com/containers/netavark
-          make -C netavark/
-          sudo mkdir -p /usr/local/libexec/podman/
-          sudo cp "$PWD/netavark/bin"/* /usr/local/libexec/podman/
-          curl -L https://github.com/containers/crun/releases/download/1.14.3/crun-1.14.3-linux-amd64 --output crun
-          chmod +x crun
-          sudo cp crun /usr/local/bin/crun
-          echo "BUILDAH_RUNTIME=/usr/local/bin/crun" >> $GITHUB_ENV
-
-          sudo apt-get install -y passt
-
-      - name: Force SLUG to lowercase
-        uses: actions/github-script@v6
-        with:
-          github-token: n/a
-          script: |
-            core.exportVariable('SLUG', process.env.SLUG.toLowerCase());
-
-      - name: Login to GitHub Container Registry
-        if: env.PUSH_GHCR
-        run: exec buildah login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
-
-      # - name: Login to Quay
-      #   if: env.PUSH_QUAY
-      #   run: exec buildah login -u ${{ secrets.QUAY_USER }} -p ${{ secrets.QUAY_TOKEN }} quay.io
-
-      - name: Login to Docker Hub
-        if: env.PUSH_DOCKER_HUB
-        run: exec buildah login -u ${{ secrets.DOCKER_USER }} -p ${{ secrets.DOCKER_TOKEN }} docker.io
-
-      - name: Print tag
-        run: |
-          if ${{ ( github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ) }} ; then
-            echo "PART_TAG=$(date +%Y%m%d)" | tee -a "$GITHUB_ENV"
-          else
-            echo "PART_TAG=dev" | tee -a "$GITHUB_ENV"
-          fi
-
-      - name: Set Ubuntu version to RELEASE
-        run: |
-          if [ "$LATEST_TAG" = "${{ matrix.TAG }}" ]; then
-            echo "RELEASE_TAG=$(lsb_release -rs)" | tee -a "$GITHUB_ENV"
-          else
-            echo "RELEASE_TAG=${{ matrix.TAG }}" | tee -a "$GITHUB_ENV"
-          fi
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
-
-      - uses: actions/checkout@v3
-
-      - name: Build and push ${{ env.DISTRO }}:${{ env.TAG }}
-        shell: buildah unshare pwsh "{0}"
-        env:
-          RUNNER: root
-          TAG: act-${{ matrix.TAG }}
-          LATEST_TAG: act-latest
-          TYPE: act
-          FROM_IMAGE: buildpack-deps
-          FROM_TAG: ${{ env.RELEASE_TAG }}
-          BUILD_TAG_VERSION: ${{ env.PART_TAG }}
-          BUILD_TAG: act-${{ matrix.TAG }}
-          PUSH_LATEST: ${{ env.LATEST_TAG == matrix.TAG && '1' || '' }}
-          PUSH_DEFAULT: ${{ ( github.event_name != 'pull_request' && github.event_name != 'push' && !env.ACT ) && '1' || '' }}
-        run: |
-          $tags = @()
-          $tagNames = @( "$env:TAG-$env:PART_TAG" )
-          if($env:PUSH_LATEST) {
-            $tagNames += "$env:LATEST_TAG-$env:PART_TAG"
-          }
-          if($env:PUSH_DEFAULT) {
-            $tagNames += $env:TAG
-            if($env:PUSH_LATEST) {
-              $tagNames += $env:LATEST_TAG
-            }
-          }
-
-          foreach($tagName in $tagNames) {
-            if($env:PUSH_GHCR) {
-              $tags += "ghcr.io/${env:SLUG}:$tagName"
-            }
-            # if($env:PUSH_QUAY) {
-            #   $tags += "quay.io/${env:SLUG}:$tagName"
-            # }
-            if($env:PUSH_DOCKER_HUB) {
-              $tags += "docker.io/${env:SLUG}:$tagName"
-            }
-          }
-
-          echo $tags
-
-          ./build.ps1 `
-              -push `
-              -tags $tags
-
-      - name: Build and push ${{ env.DISTRO }}:${{ env.TAG }}
-        shell: buildah unshare pwsh "{0}"
-        env:
-          RUNNER: runner
-          TAG: runner-${{ matrix.TAG }}
-          LATEST_TAG: runner-latest
-          TYPE: runner
-          FROM_IMAGE: ghcr.io/${{ env.SLUG }}
-          FROM_TAG: act-${{ matrix.TAG }}-${{ env.PART_TAG }}
-          BUILD_TAG_VERSION: ${{ env.PART_TAG }}
-          BUILD_TAG: runner-${{ matrix.TAG }}
-          PUSH_LATEST: ${{ env.LATEST_TAG == matrix.TAG && '1' || '' }}
-          PUSH_DEFAULT: ${{ ( github.event_name != 'pull_request' && github.event_name != 'push' && !env.ACT ) && '1' || '' }}
-        run: |
-          $tags = @()
-          $tagNames = @( "$env:TAG-$env:PART_TAG" )
-          if($env:PUSH_LATEST) {
-            $tagNames += "$env:LATEST_TAG-$env:PART_TAG"
-          }
-          if($env:PUSH_DEFAULT) {
-            $tagNames += $env:TAG
-            if($env:PUSH_LATEST) {
-              $tagNames += $env:LATEST_TAG
-            }
-          }
-
-          foreach($tagName in $tagNames) {
-            if($env:PUSH_GHCR) {
-              $tags += "ghcr.io/${env:SLUG}:$tagName"
-            }
-            # if($env:PUSH_QUAY) {
-            #   $tags += "quay.io/${env:SLUG}:$tagName"
-            # }
-            if($env:PUSH_DOCKER_HUB) {
-              $tags += "docker.io/${env:SLUG}:$tagName"
-            }
-          }
-
-          echo $tags
-
-          ./build.ps1 `
-              -push `
-              -tags $tags
-
-      - if: ${{ !env.SKIP_TEST }}
-        uses: actions/setup-go@v3
-        with:
-          go-version: '^1.16'
-
-      - if: ${{ !env.SKIP_TEST }}
-        uses: actions/checkout@v3
-        with:
-          repository: nektos/act
-          path: act
-
-      - if: ${{ !env.SKIP_TEST }}
-        env:
-          ACT_TEST_IMAGE: ghcr.io/${{ env.SLUG }}:act-${{ matrix.TAG }}-${{ env.PART_TAG }}
-        run: |
-          cd act/
-          go test ./...
-
-  build-flavours:
-    name: Build ${{ matrix.TYPE }}:${{ matrix.TAG }}
-    if: (!cancelled() && !failure())
-    runs-on: ubuntu-latest
-    needs: [build-base]
-    env:
-      PLATFORMS: ${{ matrix.PLATFORMS }}
-      BUILD_TAG: ${{ matrix.TYPE }}-${{ matrix.TAG }}
-      TYPE: ${{ matrix.TYPE }}
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
-      max-parallel: 8
       matrix:
-        TAG:
-          - 24.04
-          - 22.04
-          - 20.04
-        TYPE:
-          - go
-          - js
-          - pwsh
-          - rust
-          - dotnet
-          - java-tools
-          - gh
-          - custom
-        include:
-          - PLATFORMS: linux/amd64,linux/arm64
-            TYPE: go
-          - PLATFORMS: linux/amd64,linux/arm64
-            TYPE: js
-          - PLATFORMS: linux/amd64,linux/arm64
-            TYPE: pwsh
-          - PLATFORMS: linux/amd64,linux/arm64
-            TYPE: rust
-          - PLATFORMS: linux/amd64,linux/arm64
-            TYPE: dotnet
-          - PLATFORMS: linux/amd64,linux/arm64
-            TYPE: java-tools
-          - PLATFORMS: linux/amd64,linux/arm64,linux/arm/v7
-            TYPE: gh
-          - PLATFORMS: linux/amd64,linux/arm64
-            TYPE: custom
-        exclude:
-          - TAG: 20.04
-            TYPE: go
+        ubuntu: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.ubuntu_version == 'both' && fromJson('["22.04","24.04"]') || github.event_name == 'workflow_dispatch' && fromJson(format('["{0}"]', github.event.inputs.ubuntu_version)) || fromJson('["22.04","24.04"]') }}
     steps:
-      - name: Disable apparmor restrictions
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '>=1.21.0'
-      - name: Setup buildah
-        run: |
-          sudo apt-get -y -qq update
-          sudo apt-get -y install bats btrfs-progs git go-md2man golang libapparmor-dev libglib2.0-dev libgpgme11-dev libseccomp-dev libselinux1-dev make skopeo
-          git clone https://github.com/containers/buildah buildah
-          git -C buildah checkout v1.35.0
-          make -C buildah buildah
-          sudo mkdir -p /usr/local/bin/
-          sudo cp "$PWD/buildah/bin"/* /usr/local/bin/
-          sudo apt install protobuf-compiler
-          git clone https://github.com/containers/netavark
-          make -C netavark/
-          sudo mkdir -p /usr/local/libexec/podman/
-          sudo cp "$PWD/netavark/bin"/* /usr/local/libexec/podman/
-          curl -L https://github.com/containers/crun/releases/download/1.14.3/crun-1.14.3-linux-amd64 --output crun
-          chmod +x crun
-          sudo cp crun /usr/local/bin/crun
-          echo "BUILDAH_RUNTIME=/usr/local/bin/crun" >> $GITHUB_ENV
-
-          sudo apt-get install -y passt
-
-      - name: Cleanup
-        run: |
-          docker rmi -f $(docker images -aq) || :
-          rm -r "$RUNNER_TOOL_CACHE" || :
-          rm -r "$RUNNER_TOOLSDIRECTORY" || :
-          rm -r "$AGENT_TOOLSDIRECTORY" || :
-        shell: bash
-      - name: Force SLUG to lowercase
-        uses: actions/github-script@v6
-        with:
-          github-token: n/a
-          script: |
-            core.exportVariable('SLUG', process.env.SLUG.toLowerCase());
-
-      - name: Login to GitHub Container Registry
-        if: env.PUSH_GHCR
-        run: exec buildah login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
-
-      # - name: Login to Quay
-      #   if: env.PUSH_QUAY
-      #   run: exec buildah login -u ${{ secrets.QUAY_USER }} -p ${{ secrets.QUAY_TOKEN }} quay.io
-
-      - name: Login to Docker Hub
-        if: env.PUSH_DOCKER_HUB
-        run: exec buildah login -u ${{ secrets.DOCKER_USER }} -p ${{ secrets.DOCKER_TOKEN }} docker.io
-
-      - name: Print tag
-        run: |
-          if ${{ ( github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ) }} ; then
-            echo "PART_TAG=$(date +%Y%m%d)" | tee -a "$GITHUB_ENV"
-          else
-            echo "PART_TAG=dev" | tee -a "$GITHUB_ENV"
-          fi
-
-      - name: Set Ubuntu version to RELEASE
-        run: |
-          if [ "$LATEST_TAG" = "${{ matrix.TAG }}" ]; then
-            echo "RELEASE_TAG=$(lsb_release -rs)" | tee -a "$GITHUB_ENV"
-          else
-            echo "RELEASE_TAG=${{ matrix.TAG }}" | tee -a "$GITHUB_ENV"
-          fi
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+        uses: docker/setup-qemu-action@v3
 
-      - uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push ${{ env.DISTRO }}:${{ env.TAG }}
-        shell: buildah unshare pwsh "{0}"
-        env:
-          TAG: ${{ matrix.TYPE }}-${{ matrix.TAG }}
-          LATEST_TAG: ${{ matrix.TYPE }}-latest
-          FROM_IMAGE: ghcr.io/${{ env.SLUG }}
-          FROM_TAG: act-${{ matrix.TAG }}-${{ env.PART_TAG }}
-          BUILD_TAG_VERSION: ${{ env.PART_TAG }}
-          PUSH_LATEST: ${{ env.LATEST_TAG == matrix.TAG && '1' || '' }}
-          PUSH_DEFAULT: ${{ ( github.event_name != 'pull_request' && github.event_name != 'push' && !env.ACT ) && '1' || '' }}
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
         run: |
-          $tags = @()
-          $tagNames = @( "$env:TAG-$env:PART_TAG" )
-          if($env:PUSH_LATEST) {
-            $tagNames += "$env:LATEST_TAG-$env:PART_TAG"
-          }
-          if($env:PUSH_DEFAULT) {
-            $tagNames += $env:TAG
-            if($env:PUSH_LATEST) {
-              $tagNames += $env:LATEST_TAG
-            }
-          }
+          # Generate tags
+          VERSION_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:act-${{ matrix.ubuntu }}"
+          
+          # Add latest tag for 24.04
+          if [ "${{ matrix.ubuntu }}" = "24.04" ]; then
+            LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:act-latest"
+            TAGS="${VERSION_TAG},${LATEST_TAG}"
+          else
+            TAGS="${VERSION_TAG}"
+          fi
+          
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
+          echo "version_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
 
-          foreach($tagName in $tagNames) {
-            if($env:PUSH_GHCR) {
-              $tags += "ghcr.io/${env:SLUG}:$tagName"
-            }
-            # if($env:PUSH_QUAY) {
-            #   $tags += "quay.io/${env:SLUG}:$tagName"
-            # }
-            if($env:PUSH_DOCKER_HUB) {
-              $tags += "docker.io/${env:SLUG}:$tagName"
-            }
-          }
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./linux/ubuntu/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ (github.event_name != 'pull_request' && (github.event.inputs.push_image == 'true' || github.event.inputs.push_image == '')) || github.event_name == 'schedule' || github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            FROM_IMAGE=ubuntu
+            FROM_TAG=${{ matrix.ubuntu }}
+            NODE_VERSION=22 24
+            DISTRO=ubuntu
+            TYPE=act
+            RUNNER=root
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+            BUILD_OWNER=${{ github.repository_owner }}
+            BUILD_REPO=${{ github.event.repository.name }}
+            BUILD_TAG=act
+            BUILD_TAG_VERSION=act-${{ matrix.ubuntu }}
+            BUILD_REF=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-          echo $tags
+      - name: Test image
+        if: success()
+        run: |
+          # Pull and test the built image
+          docker pull ${{ steps.meta.outputs.version_tag }} --platform linux/amd64
+          docker run --rm ${{ steps.meta.outputs.version_tag }} bash -c "echo 'Image test successful'"
+          
+          # Verify environment variables
+          docker run --rm ${{ steps.meta.outputs.version_tag }} bash -c "cat /etc/environment | head -20"
 
-          ./build.ps1 `
-              -push `
-              -tags $tags
+  summary:
+    needs: build
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Built act Docker images successfully." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Event: ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Ref: ${{ github.ref }}" >> $GITHUB_STEP_SUMMARY
+          echo "- SHA: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
