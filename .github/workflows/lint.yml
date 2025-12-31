@@ -19,20 +19,20 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
           fetch-depth: 0
 
       - name: Run MegaLinter
         id: ml
-        uses: oxsecurity/megalinter@bacb5f8674e3730b904ca4d20c8bd477bc51b1a7 # v7
+        uses: oxsecurity/megalinter@55a59b24a441e0e1943080d4a512d827710d4a9d # v9.2.0
         env:
           VALIDATE_ALL_CODEBASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Archive production artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: MegaLinter-reports
           path: |
@@ -42,6 +42,6 @@ jobs:
       - name: Upload MegaLinter scan results to GitHub Security
         if: always()
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@45c373516f557556c15d420e3f5e0aa3d64366bc # v3
+        uses: github/codeql-action/upload-sarif@c43362b91a940600cde2ebae39ec7a35ad66bdc0 # codeql-bundle-v2.23.8
         with:
           sarif_file: megalinter-reports/megalinter-report.sarif
